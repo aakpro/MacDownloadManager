@@ -1,10 +1,11 @@
 # MacDownloader: Technical Specification
 
-**Version:** 1.0.0-draft  
+**Version:** 1.0.0 (Release)  
+**Status:** Released  
 **Platform:** macOS 14.0+ (Sonoma, Sequoia)  
 **Language:** Swift 6.0  
 **UI Framework:** SwiftUI  
-**Engine:** URLSession with Custom Byte-Range Segmentation  
+**Engine:** URLSession with Resumable Byte-Range Streaming  
 
 ---
 
