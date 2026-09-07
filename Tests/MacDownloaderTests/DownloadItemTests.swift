@@ -9,6 +9,17 @@ final class DownloadItemTests: XCTestCase {
         XCTAssertEqual(filename, "setup_v1.0.dmg")
     }
 
+    func testFilenameExtractionFromQueryParameters() {
+        let url1 = URL(string: "https://git.ir/api/post/get-download-links/XQy3g/?token=4f82f13e677e469cad78df7397e0fad8&hash=GDdJ6RW3ZQ92wz4xmAMabNgL9LQnpXYkPj0L1Kv5O7VBErln8e&filename=001-Introduction-07tg-git.ir.mp4")!
+        XCTAssertEqual(DownloadItem.extractFilename(from: url1), "001-Introduction-07tg-git.ir.mp4")
+
+        let url2 = URL(string: "https://git.ir/api/post/get-download-links/XQy3g/?token=e2030d4d2dac4d7f959f4e0488260be7&hash=GDdJ6RW3ZQ92wz4xmAMabNgL9LQnpXYkPj0L1Kv5O7VBErln8e&filename=002-Understanding%20the%20Roles%20and%20Responsibilities-jtiX-git.ir.srt")!
+        XCTAssertEqual(DownloadItem.extractFilename(from: url2), "002-Understanding the Roles and Responsibilities-jtiX-git.ir.srt")
+
+        let s3URL = URL(string: "https://s3.amazonaws.com/bucket/doc?response-content-disposition=attachment%3B%20filename%3D%22guide.pdf%22")!
+        XCTAssertEqual(DownloadItem.extractFilename(from: s3URL), "guide.pdf")
+    }
+
     func testCategoryAutoDetection() {
         XCTAssertEqual(DownloadCategory.detect(from: "report.pdf"), .documents)
         XCTAssertEqual(DownloadCategory.detect(from: "archive.tar.gz"), .archives)

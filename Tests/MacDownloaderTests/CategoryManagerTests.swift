@@ -49,4 +49,17 @@ final class CategoryManagerTests: XCTestCase {
         let third = CategoryManager.resolveUniqueFilename(in: tempDir, originalFilename: original)
         XCTAssertEqual(third, "archive (2).zip")
     }
+
+    func testUniqueFilenameWithQueuedNames() {
+        let tempDir = URL(fileURLWithPath: "/tmp/fake_dir")
+        let original = "video.mp4"
+        let existing: Set<String> = ["video.mp4", "video (1).mp4"]
+
+        let resolved = CategoryManager.resolveUniqueFilename(
+            in: tempDir,
+            originalFilename: original,
+            existingNames: existing
+        )
+        XCTAssertEqual(resolved, "video (2).mp4")
+    }
 }

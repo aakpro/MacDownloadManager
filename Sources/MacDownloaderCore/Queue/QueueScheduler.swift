@@ -33,12 +33,21 @@ public final class QueueScheduler: ObservableObject {
         persistenceManager: PersistenceManager = PersistenceManager(),
         categoryManager: CategoryManager = CategoryManager(),
         speedLimiter: SpeedLimiter = SpeedLimiter(),
-        urlSession: URLSession = .shared
+        urlSession: URLSession? = nil
     ) {
         self.persistenceManager = persistenceManager
         self.categoryManager = categoryManager
         self.speedLimiter = speedLimiter
-        self.urlSession = urlSession
+        if let session = urlSession {
+            self.urlSession = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.httpAdditionalHeaders = [
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "*/*"
+            ]
+            self.urlSession = URLSession(configuration: config)
+        }
 
         // Restore persisted queue
         self.items = persistenceManager.loadQueue()
@@ -60,12 +69,23 @@ public final class QueueScheduler: ObservableObject {
         customCategory: DownloadCategory? = nil,
         startImmediately: Bool = true
     ) {
+        var allocatedNamesByFolder: [URL: Set<String>] = [:]
+        for item in items {
+            allocatedNamesByFolder[item.destinationFolder, default: []].insert(item.filename.lowercased())
+        }
+
         for url in urls {
             let filename = DownloadItem.extractFilename(from: url)
             let category = customCategory ?? DownloadCategory.detect(from: filename)
             let targetFolder = categoryManager.destinationFolder(for: category, customBase: destinationFolder)
 
-            let uniqueName = CategoryManager.resolveUniqueFilename(in: targetFolder, originalFilename: filename)
+            let existingInFolder = allocatedNamesByFolder[targetFolder, default: []]
+            let uniqueName = CategoryManager.resolveUniqueFilename(
+                in: targetFolder,
+                originalFilename: filename,
+                existingNames: existingInFolder
+            )
+            allocatedNamesByFolder[targetFolder, default: []].insert(uniqueName.lowercased())
 
             let item = DownloadItem(
                 url: url,

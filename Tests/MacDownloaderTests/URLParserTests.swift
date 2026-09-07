@@ -77,6 +77,19 @@ final class URLParserTests: XCTestCase {
         XCTAssertEqual(mp4Only[1].lastPathComponent, "movie.mp4")
     }
 
+    func testExtensionFilterWithQueryParameters() {
+        let input = """
+        https://git.ir/api/post/get-download-links/XQy3g/?token=123&filename=lesson01.mp4
+        https://git.ir/api/post/get-download-links/XQy3g/?token=456&filename=lesson01.srt
+        https://git.ir/api/post/get-download-links/XQy3g/?token=789&filename=lesson02.mp4
+        """
+        let mp4Only = URLParser.parse(text: input, filterExtension: "mp4")
+        XCTAssertEqual(mp4Only.count, 2)
+
+        let srtOnly = URLParser.parse(text: input, filterExtension: "srt")
+        XCTAssertEqual(srtOnly.count, 1)
+    }
+
     func testInvalidSchemeIgnored() {
         let input = "ftp://example.com/file.zip, not_a_url, mailto:test@example.com, https://valid.com/file.dmg"
         let urls = URLParser.parse(text: input)

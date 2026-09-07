@@ -66,12 +66,18 @@ public final class ClipboardMonitor: ObservableObject {
         let downloadableExtensions: Set<String> = [
             "zip", "rar", "7z", "tar", "gz", "iso", "dmg", "pkg", "exe",
             "pdf", "docx", "xlsx", "epub", "mp4", "mkv", "mov", "webm",
-            "mp3", "flac", "wav", "aac"
+            "mp3", "flac", "wav", "aac", "srt", "vtt", "sub", "ass"
         ]
 
         let validDownloads = parsed.filter { url in
-            let ext = url.pathExtension.lowercased()
-            return downloadableExtensions.contains(ext) || url.path.contains("/download")
+            let pathExt = url.pathExtension.lowercased()
+            let detectedName = DownloadItem.extractFilename(from: url)
+            let detectedExt = (detectedName as NSString).pathExtension.lowercased()
+
+            let hasDownloadableExt = downloadableExtensions.contains(pathExt) || downloadableExtensions.contains(detectedExt)
+            let hasDownloadEndpoint = url.path.lowercased().contains("download")
+
+            return hasDownloadableExt || hasDownloadEndpoint
         }
 
         if !validDownloads.isEmpty {

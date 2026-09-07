@@ -129,16 +129,94 @@ public struct DownloadItem: Identifiable, Codable, Sendable, Equatable {
     }
 
     public static func extractFilename(from url: URL) -> String {
+        // 1. Check URL query parameters for explicit filenames (e.g. ?filename=..., ?file=...)
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let queryItems = components.queryItems {
+            let candidateKeys = ["filename", "file", "name", "fn", "f", "title"]
+
+            for key in candidateKeys {
+                if let item = queryItems.first(where: { $0.name.caseInsensitiveCompare(key) == .orderedSame }),
+                   let val = item.value?.removingPercentEncoding ?? item.value,
+                   !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let sanitized = sanitizeFilename(val)
+                    if (sanitized as NSString).pathExtension.count > 0 {
+                        return sanitized
+                    }
+                }
+            }
+
+            // Check response-content-disposition in query (common in S3/CloudFront)
+            if let rcd = queryItems.first(where: { $0.name.caseInsensitiveCompare("response-content-disposition") == .orderedSame })?.value {
+                if let parsed = extractFilenameFromContentDisposition(rcd) {
+                    return sanitizeFilename(parsed)
+                }
+            }
+        }
+
+        // 2. Check lastPathComponent of the URL path
         let lastComponent = url.lastPathComponent
         if !lastComponent.isEmpty && lastComponent != "/" {
-            // Strip potential URL query parameters if present in path
             let clean = lastComponent.components(separatedBy: "?").first ?? lastComponent
-            if !clean.isEmpty { return clean }
+            let decoded = clean.removingPercentEncoding ?? clean
+            let ext = (decoded as NSString).pathExtension.lowercased()
+
+            // Script extensions should not be preferred over query param names
+            let scriptExtensions: Set<String> = ["php", "asp", "aspx", "jsp", "cgi", "cfm"]
+            if !ext.isEmpty && !scriptExtensions.contains(ext) {
+                return sanitizeFilename(decoded)
+            }
+
+            // If lastPathComponent has no valid extension, check query param without extension
+            if let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let queryItems = components.queryItems {
+                let candidateKeys = ["filename", "file", "name", "fn", "title"]
+                for key in candidateKeys {
+                    if let item = queryItems.first(where: { $0.name.caseInsensitiveCompare(key) == .orderedSame }),
+                       let val = item.value?.removingPercentEncoding ?? item.value,
+                       !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return sanitizeFilename(val)
+                    }
+                }
+            }
+
+            if !decoded.isEmpty {
+                return sanitizeFilename(decoded)
+            }
         }
-        // Fallback to host or default
+
+        // 3. Fallback to host or default identifier
         if let host = url.host, !host.isEmpty {
             return "download_\(host)"
         }
         return "download_\(UUID().uuidString.prefix(8))"
+    }
+
+    public static func sanitizeFilename(_ name: String) -> String {
+        var clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        clean = clean.replacingOccurrences(of: "/", with: "_")
+        clean = clean.replacingOccurrences(of: ":", with: "_")
+        clean = clean.replacingOccurrences(of: "\0", with: "")
+        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
+        return clean.isEmpty ? "download" : clean
+    }
+
+    public static func extractFilenameFromContentDisposition(_ header: String) -> String? {
+        let components = header.components(separatedBy: ";")
+        for comp in components {
+            let trimmed = comp.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased().starts(with: "filename*=") {
+                let val = trimmed.dropFirst("filename*=".count)
+                // e.g. UTF-8''example.zip
+                if let utfPart = val.components(separatedBy: "''").last {
+                    let decoded = utfPart.removingPercentEncoding ?? utfPart
+                    return decoded.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
+                }
+            } else if trimmed.lowercased().starts(with: "filename=") {
+                let val = trimmed.dropFirst("filename=".count)
+                let decoded = val.removingPercentEncoding ?? String(val)
+                return decoded.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
+            }
+        }
+        return nil
     }
 }

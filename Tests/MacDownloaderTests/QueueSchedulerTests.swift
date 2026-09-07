@@ -84,4 +84,26 @@ final class QueueSchedulerTests: XCTestCase {
         XCTAssertEqual(reloadedScheduler.items.count, 1)
         XCTAssertEqual(reloadedScheduler.items[0].status, .paused)
     }
+
+    func testBatchCollisionAvoidanceInScheduler() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("batch_coll_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let persistence = PersistenceManager(customStorageDirectory: tempDir)
+        let scheduler = QueueScheduler(persistenceManager: persistence)
+        scheduler.isAutoProcessingEnabled = false
+
+        let urls = [
+            URL(string: "https://git.ir/api/download?filename=video.mp4&id=1")!,
+            URL(string: "https://git.ir/api/download?filename=video.mp4&id=2")!,
+            URL(string: "https://git.ir/api/download?filename=video.mp4&id=3")!
+        ]
+
+        scheduler.add(urls: urls, destinationFolder: tempDir, startImmediately: false)
+        XCTAssertEqual(scheduler.items.count, 3)
+        XCTAssertEqual(scheduler.items[0].filename, "video.mp4")
+        XCTAssertEqual(scheduler.items[1].filename, "video (1).mp4")
+        XCTAssertEqual(scheduler.items[2].filename, "video (2).mp4")
+    }
 }

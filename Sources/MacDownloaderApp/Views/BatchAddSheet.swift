@@ -114,6 +114,42 @@ public struct BatchAddSheet: View {
             .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
             .clipShape(RoundedRectangle(cornerRadius: 6))
 
+            // Detected Files Preview
+            if !parsedURLs.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Detected Files Preview (\(parsedURLs.count)):")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.secondary)
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(parsedURLs.prefix(8), id: \.self) { url in
+                                HStack(spacing: 6) {
+                                    Image(systemName: DownloadCategory.detect(from: DownloadItem.extractFilename(from: url)).iconName)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                    Text(DownloadItem.extractFilename(from: url))
+                                        .font(.caption2)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                            if parsedURLs.count > 8 {
+                                Text("... and \(parsedURLs.count - 8) more")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .italic()
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 80)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            }
+
             // Footer: URL Count badge + Add button
             HStack {
                 HStack(spacing: 6) {

@@ -28,12 +28,20 @@ public struct CategoryManager: Sendable {
     }
 
     /// Resolves a non-colliding unique filename in the target directory (e.g. `file (1).zip`).
-    public static func resolveUniqueFilename(in directory: URL, originalFilename: String) -> String {
+    /// Resolves a non-colliding unique filename in the target directory (e.g. `file (1).zip`), checking both disk and queued names.
+    public static func resolveUniqueFilename(
+        in directory: URL,
+        originalFilename: String,
+        existingNames: Set<String> = []
+    ) -> String {
         let fileManager = FileManager.default
         var candidate = originalFilename
         var targetURL = directory.appendingPathComponent(candidate)
 
-        guard fileManager.fileExists(atPath: targetURL.path) else {
+        let existsOnDisk = fileManager.fileExists(atPath: targetURL.path)
+        let existsInQueue = existingNames.contains(candidate.lowercased())
+
+        guard existsOnDisk || existsInQueue else {
             return candidate
         }
 
@@ -41,7 +49,7 @@ public struct CategoryManager: Sendable {
         let ext = (originalFilename as NSString).pathExtension
 
         var counter = 1
-        while fileManager.fileExists(atPath: targetURL.path) {
+        while fileManager.fileExists(atPath: targetURL.path) || existingNames.contains(candidate.lowercased()) {
             if ext.isEmpty {
                 candidate = "\(name) (\(counter))"
             } else {

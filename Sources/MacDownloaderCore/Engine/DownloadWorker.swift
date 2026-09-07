@@ -1,12 +1,12 @@
 import Foundation
 
-/// Core network worker responsible for executing a single download item using resumable streams and byte ranges.
+/// Core network worker responsible for executing a single download item using high-performance chunked streams and byte ranges.
 public actor DownloadWorker {
     public let itemID: UUID
     public private(set) var item: DownloadItem
 
     private var activeTask: Task<Void, Error>?
-    private let urlSession: URLSession
+    private var activeStreamSession: WorkerStreamSession?
     private let speedLimiter: SpeedLimiter?
 
     // Progress tracking
@@ -21,12 +21,11 @@ public actor DownloadWorker {
 
     public init(
         item: DownloadItem,
-        urlSession: URLSession = .shared,
+        urlSession: URLSession? = nil,
         speedLimiter: SpeedLimiter? = nil
     ) {
         self.itemID = item.id
         self.item = item
-        self.urlSession = urlSession
         self.speedLimiter = speedLimiter
     }
 
@@ -67,6 +66,8 @@ public actor DownloadWorker {
         item.status = .paused
         item.speed = 0
         item.eta = nil
+        activeStreamSession?.cancel()
+        activeStreamSession = nil
         activeTask?.cancel()
         activeTask = nil
         onProgressUpdate?(item)
@@ -77,6 +78,8 @@ public actor DownloadWorker {
         item.status = .cancelled
         item.speed = 0
         item.eta = nil
+        activeStreamSession?.cancel()
+        activeStreamSession = nil
         activeTask?.cancel()
         activeTask = nil
 
@@ -93,45 +96,59 @@ public actor DownloadWorker {
         // Ensure destination directory exists
         try fileManager.createDirectory(at: item.destinationFolder, withIntermediateDirectories: true)
 
-        let partURL = item.partFileURL
+        var currentPartURL = item.partFileURL
         var existingBytes: Int64 = 0
-        if fileManager.fileExists(atPath: partURL.path) {
-            if let attrs = try? fileManager.attributesOfItem(atPath: partURL.path),
+        if fileManager.fileExists(atPath: currentPartURL.path) {
+            if let attrs = try? fileManager.attributesOfItem(atPath: currentPartURL.path),
                let size = attrs[.size] as? Int64 {
                 existingBytes = size
             }
         }
 
         var request = URLRequest(url: item.url)
-        request.timeoutInterval = 30
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 45
 
         if existingBytes > 0 {
             request.setValue("bytes=\(existingBytes)-", forHTTPHeaderField: "Range")
         }
 
-        let (asyncBytes, response) = try await urlSession.bytes(for: request)
+        let streamer = WorkerStreamSession()
+        self.activeStreamSession = streamer
 
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            throw NSError(
-                domain: "MacDownloaderHTTPError",
-                code: httpResponse.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "HTTP Server returned status code \(httpResponse.statusCode)"]
-            )
-        }
+        let (httpResponse, stream) = try await streamer.start(request: request)
 
         // Determine resume capability & Content-Length
         let isPartial = httpResponse.statusCode == 206
         let acceptRanges = httpResponse.value(forHTTPHeaderField: "Accept-Ranges")?.lowercased() == "bytes"
         item.supportsRanges = isPartial || acceptRanges
 
-        if let contentDisposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition") {
-            if let parsedName = extractFilenameFromContentDisposition(contentDisposition) {
-                item.filename = parsedName
+        // Refine filename from server response (Content-Disposition or final redirect target URL)
+        var refinedName: String?
+        if let contentDisposition = httpResponse.value(forHTTPHeaderField: "Content-Disposition"),
+           let parsed = DownloadItem.extractFilenameFromContentDisposition(contentDisposition) {
+            refinedName = parsed
+        } else if let finalURL = httpResponse.url {
+            let extracted = DownloadItem.extractFilename(from: finalURL)
+            if !extracted.starts(with: "download_") && extracted != (item.url.lastPathComponent) {
+                refinedName = extracted
+            }
+        }
+
+        if let newName = refinedName, !newName.isEmpty {
+            let currentHasExt = (item.filename as NSString).pathExtension.count > 0
+            let newHasExt = (newName as NSString).pathExtension.count > 0
+
+            // Upgrade if current filename lacks an extension or new filename has valid extension
+            if !currentHasExt && newHasExt {
+                let uniqueNewName = CategoryManager.resolveUniqueFilename(in: item.destinationFolder, originalFilename: newName)
+                let oldPartURL = currentPartURL
+                item.filename = uniqueNewName
+                item.category = DownloadCategory.detect(from: uniqueNewName)
+                currentPartURL = item.partFileURL
+
+                if fileManager.fileExists(atPath: oldPartURL.path) && oldPartURL != currentPartURL {
+                    try? fileManager.moveItem(at: oldPartURL, to: currentPartURL)
+                }
             }
         }
 
@@ -144,58 +161,53 @@ public actor DownloadWorker {
         let fileHandle: FileHandle
         if isPartial && existingBytes > 0 {
             item.downloadedBytes = existingBytes
-            fileHandle = try FileHandle(forWritingTo: partURL)
+            fileHandle = try FileHandle(forWritingTo: currentPartURL)
             try fileHandle.seekToEnd()
         } else {
             // New download or server ignored Range request
             item.downloadedBytes = 0
-            fileManager.createFile(atPath: partURL.path, contents: nil)
-            fileHandle = try FileHandle(forWritingTo: partURL)
+            fileManager.createFile(atPath: currentPartURL.path, contents: nil)
+            fileHandle = try FileHandle(forWritingTo: currentPartURL)
         }
 
         item.status = .downloading
         lastSpeedCalculationTime = Date()
         bytesSinceLastSpeedCalculation = 0
+        onProgressUpdate?(item)
 
-        // Stream data chunks
-        var chunkBuffer = Data()
-        let bufferThreshold = 64 * 1024 // 64 KB write buffer
+        // Stream high-performance data chunks
+        do {
+            for try await chunk in stream {
+                try Task.checkCancellation()
 
-        for try await byte in asyncBytes {
-            try Task.checkCancellation()
-
-            chunkBuffer.append(byte)
-            item.downloadedBytes += 1
-            bytesSinceLastSpeedCalculation += 1
-
-            if chunkBuffer.count >= bufferThreshold {
-                try fileHandle.write(contentsOf: chunkBuffer)
-                chunkBuffer.removeAll(keepingCapacity: true)
+                try fileHandle.write(contentsOf: chunk)
+                item.downloadedBytes += Int64(chunk.count)
+                bytesSinceLastSpeedCalculation += Int64(chunk.count)
 
                 // Throttle speed if limiter active
                 if let limiter = speedLimiter {
-                    await limiter.throttle(bytes: Int64(bufferThreshold))
+                    await limiter.throttle(bytes: Int64(chunk.count))
                 }
 
                 updateSpeedAndETA()
                 onProgressUpdate?(item)
             }
+
+            try fileHandle.synchronize()
+            try fileHandle.close()
+        } catch {
+            try? fileHandle.close()
+            throw error
         }
 
-        // Write remaining bytes
-        if !chunkBuffer.isEmpty {
-            try fileHandle.write(contentsOf: chunkBuffer)
-            chunkBuffer.removeAll()
-        }
-
-        try fileHandle.close()
+        self.activeStreamSession = nil
 
         // Download complete: atomically move from .part to target destination
         let finalDestination = item.destinationFileURL
         if fileManager.fileExists(atPath: finalDestination.path) {
             try fileManager.removeItem(at: finalDestination)
         }
-        try fileManager.moveItem(at: partURL, to: finalDestination)
+        try fileManager.moveItem(at: currentPartURL, to: finalDestination)
 
         item.status = .completed
         item.completedAt = Date()
@@ -237,6 +249,7 @@ public actor DownloadWorker {
         if item.status != .cancelled {
             item.status = .paused
         }
+        activeStreamSession = nil
         onProgressUpdate?(item)
     }
 
@@ -245,20 +258,104 @@ public actor DownloadWorker {
         item.errorMessage = error.localizedDescription
         item.speed = 0
         item.eta = nil
+        activeStreamSession = nil
         onProgressUpdate?(item)
         onFailure?(item, error)
     }
+}
 
-    private func extractFilenameFromContentDisposition(_ header: String) -> String? {
-        // e.g. attachment; filename="example.zip" or filename*=UTF-8''example.zip
-        let components = header.components(separatedBy: ";")
-        for comp in components {
-            let trimmed = comp.trimmingCharacters(in: .whitespaces)
-            if trimmed.lowercased().starts(with: "filename=") {
-                let val = trimmed.dropFirst("filename=".count)
-                return val.trimmingCharacters(in: CharacterSet(charactersIn: "\" '"))
-            }
+// MARK: - Dedicated Chunk Streaming Network Session
+
+private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private var session: URLSession?
+    private var dataTask: URLSessionDataTask?
+    private var responseContinuation: CheckedContinuation<HTTPURLResponse, Error>?
+    private var streamContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+
+    override init() {
+        super.init()
+    }
+
+    func start(request: URLRequest) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        self.streamContinuation = continuation
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 45
+        config.timeoutIntervalForResource = 86400
+        config.httpAdditionalHeaders = [
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*"
+        ]
+
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        self.session = session
+
+        let task = session.dataTask(with: request)
+        self.dataTask = task
+
+        let httpResponse = try await withCheckedThrowingContinuation { cont in
+            self.responseContinuation = cont
+            task.resume()
         }
-        return nil
+
+        return (httpResponse, stream)
+    }
+
+    func cancel() {
+        dataTask?.cancel()
+        streamContinuation?.finish()
+        session?.invalidateAndCancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let http = response as? HTTPURLResponse else {
+            responseContinuation?.resume(throwing: URLError(.badServerResponse))
+            responseContinuation = nil
+            completionHandler(.cancel)
+            return
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            let error = NSError(
+                domain: "MacDownloaderHTTPError",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP Server returned status code \(http.statusCode)"]
+            )
+            responseContinuation?.resume(throwing: error)
+            responseContinuation = nil
+            completionHandler(.cancel)
+            return
+        }
+
+        responseContinuation?.resume(returning: http)
+        responseContinuation = nil
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        streamContinuation?.yield(data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            if (error as? URLError)?.code == .cancelled {
+                streamContinuation?.finish()
+            } else {
+                if let cont = responseContinuation {
+                    responseContinuation = nil
+                    cont.resume(throwing: error)
+                }
+                streamContinuation?.finish(throwing: error)
+            }
+        } else {
+            streamContinuation?.finish()
+        }
+        session.finishTasksAndInvalidate()
     }
 }

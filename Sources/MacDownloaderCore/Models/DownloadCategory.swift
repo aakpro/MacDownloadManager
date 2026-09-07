@@ -28,7 +28,7 @@ public enum DownloadCategory: String, Codable, Sendable, CaseIterable {
     public static func detect(from filename: String) -> DownloadCategory {
         let ext = (filename as NSString).pathExtension.lowercased()
         switch ext {
-        case "pdf", "doc", "docx", "txt", "rtf", "odt", "epub", "xlsx", "xls", "pptx", "ppt", "md", "csv":
+        case "pdf", "doc", "docx", "txt", "rtf", "odt", "epub", "xlsx", "xls", "pptx", "ppt", "md", "csv", "srt", "vtt", "sub", "ass":
             return .documents
         case "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz":
             return .archives

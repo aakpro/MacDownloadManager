@@ -12,14 +12,28 @@ public struct URLParser: Sendable {
     public static func parse(text: String, filterExtension: String? = nil) -> [URL] {
         var rawTokens: [String] = []
 
-        // 1. Split by newlines, carriage returns, commas, and semicolons
-        let delimiters = CharacterSet(charactersIn: ",\n\r;\t ")
-        let components = text.components(separatedBy: delimiters)
+        // 1. Split by lines, commas, semicolons, and tabs while preserving spaces within query parameters
+        let lines = text.components(separatedBy: CharacterSet.newlines)
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
 
-        for comp in components {
-            let trimmed = cleanToken(comp)
-            if !trimmed.isEmpty {
-                rawTokens.append(trimmed)
+            let subDelimiters = CharacterSet(charactersIn: ",;\t")
+            let parts = trimmedLine.components(separatedBy: subDelimiters)
+            for part in parts {
+                let trimmed = cleanToken(part)
+                guard !trimmed.isEmpty else { continue }
+
+                // Check if multiple URLs exist on the same line separated by whitespace
+                if trimmed.components(separatedBy: "http").count > 2 {
+                    let spaceSeparated = trimmed.components(separatedBy: .whitespaces)
+                    for s in spaceSeparated {
+                        let cl = cleanToken(s)
+                        if !cl.isEmpty { rawTokens.append(cl) }
+                    }
+                } else {
+                    rawTokens.append(trimmed)
+                }
             }
         }
 
@@ -35,17 +49,27 @@ public struct URLParser: Sendable {
         var seen = Set<String>()
 
         for str in expandedStrings {
-            guard let url = URL(string: str),
+            var candidate = str
+            if URL(string: candidate) == nil {
+                if let encoded = candidate.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+                    candidate = encoded
+                }
+            }
+
+            guard let url = URL(string: candidate),
                   let scheme = url.scheme?.lowercased(),
                   (scheme == "http" || scheme == "https"),
                   let host = url.host, !host.isEmpty else {
                 continue
             }
 
-            // Apply extension filter if specified
+            // Apply extension filter if specified (checks path extension and query-derived filename extension)
             if let extFilter = filterExtension?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")), !extFilter.isEmpty {
                 let pathExt = url.pathExtension.lowercased()
-                if pathExt != extFilter {
+                let detectedName = DownloadItem.extractFilename(from: url)
+                let fileExt = (detectedName as NSString).pathExtension.lowercased()
+
+                if pathExt != extFilter && fileExt != extFilter {
                     continue
                 }
             }
