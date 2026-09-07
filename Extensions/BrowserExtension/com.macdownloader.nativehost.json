@@ -1,0 +1,10 @@
+{
+  "name": "com.macdownloader.nativehost",
+  "description": "MacDownloader Native Messaging Host",
+  "path": "/Applications/MacDownloader.app/Contents/MacOS/MacDownloader",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*",
+    "moz-extension://*"
+  ]
+}

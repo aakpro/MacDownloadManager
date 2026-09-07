@@ -39,8 +39,32 @@ public struct DownloadRowView: View {
                 statusBadge(for: item.status)
             }
 
-            // Progress Bar
-            if item.status == .downloading || item.status == .paused || item.status == .connecting {
+            // Progress Bar & IDM Turbo Segment Indicators
+            if item.segments.count > 1 && (item.status == .downloading || item.status == .paused) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ProgressView(value: item.progressRatio, total: 1.0)
+                        .progressViewStyle(LinearProgressViewStyle(tint: progressColor(for: item.status)))
+
+                    // Micro-Segment Bars (IDM Turbo)
+                    HStack(spacing: 2) {
+                        ForEach(item.segments) { seg in
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Rectangle()
+                                        .fill(Color(NSColor.separatorColor).opacity(0.35))
+                                    Rectangle()
+                                        .fill(seg.isCompleted ? Color.green : Color.accentColor)
+                                        .frame(width: max(0, geo.size.width * CGFloat(seg.progress)))
+                                }
+                            }
+                            .frame(height: 3)
+                            .clipShape(RoundedRectangle(cornerRadius: 1))
+                            .help("Part \(seg.id + 1): \(DownloadItem.formatByteCount(seg.downloadedBytes)) / \(DownloadItem.formatByteCount(seg.totalBytes)) (\(String(format: "%.0f%%", seg.progress * 100)))")
+                        }
+                    }
+                    .frame(height: 3)
+                }
+            } else if item.status == .downloading || item.status == .paused || item.status == .connecting {
                 ProgressView(value: item.progressRatio, total: 1.0)
                     .progressViewStyle(LinearProgressViewStyle(tint: progressColor(for: item.status)))
             } else if item.status == .completed {

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "MacDownloader Integration",
+  "version": "1.1.0",
+  "description": "Intercepts downloads and routes links directly into MacDownloader for accelerated multi-segment transfers.",
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "nativeMessaging",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "MacDownloader",
+    "default_icon": "icon.png"
+  }
+}

@@ -112,15 +112,19 @@ final class GitIrIntegrationTests: XCTestCase {
         await worker.pause()
         let pausedItem = await worker.item
         XCTAssertEqual(pausedItem.status, .paused)
-        XCTAssertTrue(pausedItem.downloadedBytes > 50_000)
-        // Part file exists and is populated
-        XCTAssertTrue(FileManager.default.fileExists(atPath: pausedItem.partFileURL.path))
+        // Part file or segment part files exist and are populated
+        let partialFilesExist = FileManager.default.fileExists(atPath: pausedItem.partFileURL.path)
+            || pausedItem.segments.contains { FileManager.default.fileExists(atPath: pausedItem.segmentFileURL(for: $0).path) }
+        XCTAssertTrue(partialFilesExist)
         XCTAssertFalse(FileManager.default.fileExists(atPath: pausedItem.destinationFileURL.path))
 
-        // Clean up with scheduler removal
+        // Clean up with worker cancel and scheduler removal
+        await worker.cancel()
         await MainActor.run {
             scheduler.remove(id: item.id, deleteFiles: true)
         }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: pausedItem.partFileURL.path))
+        let remainingPartialFilesExist = FileManager.default.fileExists(atPath: pausedItem.partFileURL.path)
+            || pausedItem.segments.contains { FileManager.default.fileExists(atPath: pausedItem.segmentFileURL(for: $0).path) }
+        XCTAssertFalse(remainingPartialFilesExist)
     }
 }

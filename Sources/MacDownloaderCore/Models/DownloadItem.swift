@@ -72,6 +72,11 @@ public struct DownloadItem: Identifiable, Codable, Sendable, Equatable {
         return destinationFolder.appendingPathComponent("\(filename).part")
     }
 
+    /// Segment file URL for a given segment.
+    public func segmentFileURL(for segment: DownloadSegment) -> URL {
+        return destinationFolder.appendingPathComponent(segment.tempFileName)
+    }
+
     /// Progress ratio from 0.0 to 1.0.
     public var progressRatio: Double {
         guard totalBytes > 0 else {

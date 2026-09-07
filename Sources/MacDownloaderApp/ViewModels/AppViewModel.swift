@@ -19,6 +19,7 @@ public final class AppViewModel: ObservableObject {
     @Published public var scheduler: QueueScheduler
     @Published public var clipboardMonitor: ClipboardMonitor
     @Published public var notificationManager: NotificationManager
+    @Published public var timeScheduler: QueueTimeScheduler
 
     // UI Navigation & Filters
     @Published public var selectedCategory: DownloadCategory? = nil
@@ -31,6 +32,7 @@ public final class AppViewModel: ObservableObject {
     // Sheet Presentations
     @Published public var isShowingAddSheet: Bool = false
     @Published public var isShowingSettingsSheet: Bool = false
+    @Published public var isShowingSchedulerSheet: Bool = false
     @Published public var initialAddInput: String = ""
 
     // Prompt for clipboard capture
@@ -41,14 +43,17 @@ public final class AppViewModel: ObservableObject {
     public init(scheduler: QueueScheduler? = nil) {
         let sched = scheduler ?? QueueScheduler()
         self.scheduler = sched
+        self.timeScheduler = QueueTimeScheduler(scheduler: sched)
         self.clipboardMonitor = ClipboardMonitor(enabled: true)
         self.notificationManager = NotificationManager.shared
 
         setupEventHooks()
 
-        // Forward scheduler updates to trigger UI refresh
+        // Forward scheduler updates to trigger UI refresh and system integrations
         sched.objectWillChange.sink { [weak self] in
-            self?.objectWillChange.send()
+            guard let self = self else { return }
+            self.objectWillChange.send()
+            self.updateSystemIntegrations()
         }.store(in: &cancellables)
 
         clipboardMonitor.onURLsDetected = { [weak self] urls in
@@ -56,11 +61,28 @@ public final class AppViewModel: ObservableObject {
         }
     }
 
+    public func updateSystemIntegrations() {
+        let activeItems = scheduler.items.filter { $0.status.isActive }
+        let activeCount = activeItems.count
+        let totalBytes = activeItems.reduce(0) { $0 + max(0, $1.totalBytes) }
+        let downloadedBytes = activeItems.reduce(0) { $0 + $1.downloadedBytes }
+        let ratio = totalBytes > 0 ? Double(downloadedBytes) / Double(totalBytes) : 0.0
+
+        DockTileManager.shared.update(activeCount: activeCount, progressRatio: ratio)
+        PowerManager.shared.updateAssertion(hasActiveDownloads: activeCount > 0)
+    }
+
     private func setupEventHooks() {
         scheduler.onDownloadCompleted = { [weak self] item in
             Task { @MainActor [weak self] in
-                self?.notificationManager.playCompletionSound(isSuccess: true)
-                self?.notificationManager.postDownloadCompletedNotification(for: item)
+                guard let self = self else { return }
+                self.notificationManager.playCompletionSound(isSuccess: true)
+                self.notificationManager.postDownloadCompletedNotification(for: item)
+
+                let remaining = self.scheduler.items.filter { $0.status.isActive || $0.status == .queued }
+                if remaining.isEmpty {
+                    PowerManager.shared.handleQueueCompleted()
+                }
             }
         }
 

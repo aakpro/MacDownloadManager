@@ -1,17 +1,17 @@
 # MacDownloader: Technical Specification
 
-**Version:** 1.0.0 (Release)  
+**Version:** 1.1.0 (Full IDM Feature Suite)  
 **Status:** Released  
 **Platform:** macOS 14.0+ (Sonoma, Sequoia)  
 **Language:** Swift 6.0  
-**UI Framework:** SwiftUI  
-**Engine:** URLSession with Resumable Byte-Range Streaming  
+**UI Framework:** SwiftUI & AppKit  
+**Engine:** Multi-Segment Parallel HTTP Range Streaming (IDM Turbo)  
 
 ---
 
 ## 1. Executive Summary
 
-MacDownloader is a native macOS download manager engineered to bring the acceleration, queue management, and deep automation of Internet Download Manager (IDM) to macOS. It provides multi-link paste parsing (comma, newline, or whitespace separated), dynamic multi-part range downloading, bandwidth throttling, smart file categorization, clipboard monitoring, and automatic queue recovery.
+MacDownloader is a native macOS download manager engineered to bring the acceleration, queue management, and deep automation of Internet Download Manager (IDM) to macOS. It provides multi-link paste parsing, dynamic multi-part range downloading (up to 8 parallel streams), bandwidth throttling, smart file categorization, clipboard monitoring, time-based queue scheduling, menu bar background monitoring, dock progress integration, system sleep prevention, and browser extension web interception.
 
 ---
 
@@ -19,66 +19,56 @@ MacDownloader is a native macOS download manager engineered to bring the acceler
 
 ### 2.1 Batch Link Input & Ingestion
 - **Delimiters Supported**: Comma (`,`), Semicolon (`;`), Newline (`\n`, `\r\n`), and Mixed Whitespace.
-- **Pattern Expansion**: Syntax like `https://example.com/item[01-20].zip` generates 20 sequential download tasks with zero-padded or integer sequences.
-- **URL Filtering & Sanitization**:
-  - Validates schemes: `http://` and `https://`.
-  - Normalizes percent-encoding.
-  - Strips accidental surrounding quotes and trailing punctuation.
-  - Extension filter option (e.g. paste a raw web page text and extract only `.mp4` or `.pdf` links).
-- **Duplicate Prevention**: Ignores or flags URLs already active in the queue.
+- **Pattern Expansion**: Syntax like `https://example.com/item[01-20].zip` generates sequential download tasks with zero-padded or integer sequences.
+- **URL Filtering & Sanitization**: Validates HTTP/HTTPS schemes, normalizes query parameters, and supports extension filtering (`.mp4`, `.srt`, etc.).
+- **Drag-and-Drop Ingestion**: Drop URLs, plain text, or `.txt` files directly onto `MainView` with visual drop-zone feedback.
+- **Floating Drop Target**: Always-on-top draggable mini basket window for quick link dropping across workspaces.
 
-### 2.2 Download Engine & Protocols
+### 2.2 Download Engine & Protocols (IDM Turbo)
+- **Multi-Segment Parallel Acceleration**:
+  - Probe request checks `Accept-Ranges: bytes` and `Content-Length`.
+  - Splits files >= 2 MB into 2 to 8 non-overlapping byte ranges downloaded in parallel via concurrent `TaskGroup` streams.
+  - Asynchronously reassembles temporary segment files (`.part.seg{N}`) with zero disk thrashing.
+  - Micro-segment visual progress indicators render live chunk download progress in `DownloadRowView`.
 - **Resumable Transfers**:
-  - Implements HTTP `Range: bytes={offset}-` headers as per RFC 9110 / RFC 7233.
-  - Checks server response: HTTP `206 Partial Content` (resumable) vs HTTP `200 OK` (non-resumable full stream).
-- **Dynamic Multi-Segment Downloading (IDM Turbo)**:
-  - When Content-Length is provided and `Accept-Ranges: bytes` is supported, splits the target file into $N$ segments (default: 4, configurable 1-8).
-  - Each segment downloads concurrently to an independent byte-range temporary file.
-  - On segment completion, parts are merged sequentially into the final file without disk thrashing.
+  - RFC 9110 / RFC 7233 byte-range resumption.
+  - Resumes individual unfinished segments without redownloading completed parts.
+  - Automatic fallback to single-stream sequential download if server rejects partial range or returns HTTP 200.
 - **Bandwidth Throttling (Speed Limiter)**:
-  - Token-bucket algorithm enforcing global or per-download speed limits (e.g., 250 KB/s, 1 MB/s, 5 MB/s, Unlimited).
+  - Token-bucket algorithm enforcing bandwidth limits (e.g. 500 KB/s, 1 MB/s, 5 MB/s, Unlimited).
 - **Error Recovery & Backoff**:
-  - Automatic retry for transient errors (connection timeouts, 503 Service Unavailable, dropped packets).
-  - Exponential backoff: retry after 2s, 4s, 8s up to 3 attempts before flagging as `failed`.
+  - Automatically recovers from HTTP 416 (Range Not Satisfiable) by clearing invalid offsets and retrying fresh.
+  - Automatic 302 redirection handling preserving headers and `Referer: scheme://host/`.
 
-### 2.3 Queue & Concurrency Management
-- **State Machine**:
-  ```text
-  [QUEUED] ---> [CONNECTING] ---> [DOWNLOADING] ---> [COMPLETED]
-     |                 |                |
-     |                 v                v
-     +----------> [CANCELLED]       [PAUSED] <---> [DOWNLOADING]
-                                        |
-                                        v
-                                     [FAILED] ---> [RETRYING]
-  ```
-- **Worker Pool**:
-  - Configurable concurrency ceiling (`maxConcurrentDownloads`: default 3, range 1–10).
-  - Queue prioritization (High, Normal, Low).
-  - Automatic dispatch: When a worker finishes or pauses, the next queued item auto-starts.
-- **Global Actions**:
-  - Pause All, Resume All, Cancel All, Clear Completed, Clear Failed.
+### 2.3 Queue & Automation Management
+- **State Machine**: `[QUEUED] -> [CONNECTING] -> [DOWNLOADING] -> [COMPLETED] / [PAUSED] / [FAILED] / [CANCELLED]`.
+- **Worker Pool**: Configurable concurrency ceiling (`maxConcurrentDownloads`: default 3, range 1–10).
+- **Time-Based Queue Scheduler**:
+  - Define automated download windows (e.g. 02:00 AM to 06:00 AM), overnight spans, and active days of week.
+  - Scheduled speed limit profiles (throttle during work hours, full speed overnight).
+  - Auto-start when schedule window opens; auto-pause when schedule window closes.
 
-### 2.4 Smart Categorization & Organization
-- Files are automatically routed based on MIME type or file extension:
-  - **Documents**: `.pdf`, `.docx`, `.doc`, `.txt`, `.epub`, `.xlsx`, `.pptx`, `.md` -> `~/Downloads/Documents/`
-  - **Archives**: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.iso`, `.dmg` -> `~/Downloads/Archives/`
-  - **Video**: `.mp4`, `.mkv`, `.mov`, `.avi`, `.webm`, `.flv` -> `~/Downloads/Video/`
-  - **Audio**: `.mp3`, `.flac`, `.wav`, `.aac`, `.m4a`, `.ogg` -> `~/Downloads/Audio/`
-  - **Programs**: `.dmg`, `.pkg`, `.app`, `.bin` -> `~/Downloads/Programs/`
-  - **General**: Fallback directory -> `~/Downloads/General/`
-- User can toggle auto-categorization or customize target folders.
+### 2.4 macOS System Integrations
+- **Menu Bar Status Item (`NSStatusItem`)**:
+  - Displays live aggregate transfer speed in system menu bar.
+  - Menu lists top active downloads, quick Pause All, Resume All, Add URLs, and Open App.
+- **Dock Tile Integration (`NSApp.dockTile`)**:
+  - Dynamic badge counter displaying active download count.
+  - Custom progress bar drawn directly onto the Dock tile icon.
+- **System Power Management**:
+  - Prevents macOS idle sleep during active downloads via `ProcessInfo.beginActivity`.
+  - Post-queue completion triggers: "Put Mac to Sleep" or "Shut Down Mac".
+  - Retains background menu bar helper when main window closes (`applicationShouldTerminateAfterLastWindowClosed = false`).
 
-### 2.5 Persistence & Fault Tolerance
-- Queue state, segment progress, and file paths are continuously written to `~/Library/Application Support/MacDownloader/queue.json`.
-- In-flight files use `.part` extensions until verified and finalized.
-- Collision avoidance: If `presentation.pdf` already exists at destination, automatically saves as `presentation (1).pdf`.
-
-### 2.6 macOS System Integration
-- Native UserNotifications on completion or failure.
-- Classic audio completion chimes (customizable).
-- Reveal in Finder (`NSWorkspace.shared.activateFileViewerSelecting`).
-- Background clipboard monitoring (`NSPasteboard`).
+### 2.5 Browser Integration (Web Interception)
+- **Native Messaging Protocol**:
+  - Stdio-based 32-bit little-endian length-prefixed JSON protocol compatible with Chrome, Brave, Edge, and Firefox.
+  - Installer script (`install_host.sh`) registers native messaging manifests.
+- **Browser Extension (Manifest V3)**:
+  - Intercepts browser download creation events (`chrome.downloads.onCreated`).
+  - Context menu items: "Download with MacDownloader" and "Download Page with MacDownloader".
+- **URL Scheme**:
+  - Registered `macdownloader://download?url=...` for universal redirection.
 
 ---
 
@@ -86,26 +76,25 @@ MacDownloader is a native macOS download manager engineered to bring the acceler
 
 ```
 [ SwiftUI App View ]  <-->  [ AppViewModel (ObservableObject) ]
-                                    |
-                            [ QueueScheduler ]
-                               /          \
-            [ DownloadWorker (1..N) ]    [ PersistenceManager ]
-                  |            |                   |
-            [ SpeedLimiter ] [ URLSession ]  [ CategoryManager ]
+      |                             |
+[ MainView ]                 [ QueueScheduler ]  <--->  [ QueueTimeScheduler ]
+      |                         /          \
+[ MenuBarManager ]   [ DownloadWorker ]  [ PersistenceManager ]
+      |                     |         \
+[ DockTileManager ]  [ SpeedLimiter ]  [ URLSession ]
+      |
+[ PowerManager ]
 ```
 
 ---
 
-## 4. Security & Permissions
-- App Sandbox entitlements:
-  - `com.apple.security.network.client`: required for outgoing HTTP/HTTPS connections.
-  - `com.apple.security.files.user-selected.read-write`: required for user destination directory selection.
-  - `com.apple.security.files.downloads.read-write`: required for writing to `~/Downloads`.
-
----
-
-## 5. Changelog & Phase History
-- **v1.0.0-phase1**: Core engine, models, multi-segment worker, and URL parser.
-- **v1.0.0-phase2**: Queue manager, persistence, checksums, and categorization.
-- **v1.0.0-phase3**: SwiftUI interface, clipboard monitor, and notifications.
-- **v1.0.0-phase4**: Makefile release packaging and distribution bundle.
+## 4. Changelog & Phase History
+- **v1.0.0**: Core engine, queue scheduler, categorization, persistence, and initial SwiftUI UI.
+- **v1.0.1**: Query parameter filename parsing, Referer/redirect headers, HTTP 416 recovery, deletion/Trash integration.
+- **v1.1.0 (Phases 5–10 Complete)**:
+  - Phase 5: Multi-segment parallel acceleration (IDM Turbo).
+  - Phase 6: Menu Bar Extra (`NSStatusItem`), Dock Tile progress, sleep prevention (`PowerManager`).
+  - Phase 7: Time-Based Queue Scheduler (`QueueTimeScheduler`, `SchedulerSheet`).
+  - Phase 8: Browser Web Interception (`NativeHostMessage`, Manifest V3 Extension, `install_host.sh`).
+  - Phase 9: Drag-and-Drop link ingestion & Floating Drop Target basket (`FloatingDropTargetManager`).
+  - Phase 10: 49 unit and integration tests passing, release `.app` package assembled.

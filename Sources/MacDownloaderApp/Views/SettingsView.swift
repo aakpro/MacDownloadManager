@@ -12,6 +12,8 @@ public struct SettingsView: View {
     @State private var soundEnabled: Bool
     @State private var notificationsEnabled: Bool
     @State private var clipboardEnabled: Bool
+    @State private var preventSleep: Bool
+    @State private var postAction: PostDownloadAction
 
     public init(viewModel: AppViewModel) {
         self.viewModel = viewModel
@@ -20,6 +22,8 @@ public struct SettingsView: View {
         self._soundEnabled = State(initialValue: viewModel.notificationManager.isSoundEnabled)
         self._notificationsEnabled = State(initialValue: viewModel.notificationManager.areNotificationsEnabled)
         self._clipboardEnabled = State(initialValue: viewModel.clipboardMonitor.isMonitoringEnabled)
+        self._preventSleep = State(initialValue: PowerManager.shared.preventSleepWhileDownloading)
+        self._postAction = State(initialValue: PowerManager.shared.postDownloadAction)
     }
 
     public var body: some View {
@@ -105,6 +109,25 @@ public struct SettingsView: View {
                         .onChange(of: soundEnabled) { _, newValue in
                             viewModel.notificationManager.isSoundEnabled = newValue
                         }
+                }
+
+                Divider()
+
+                // Section 4: Power & Sleep Automation
+                Section(header: Text("Power Management").font(.headline)) {
+                    Toggle("Prevent Mac from sleeping during active downloads", isOn: $preventSleep)
+                        .onChange(of: preventSleep) { _, newValue in
+                            PowerManager.shared.preventSleepWhileDownloading = newValue
+                        }
+
+                    Picker("When all downloads finish:", selection: $postAction) {
+                        ForEach(PostDownloadAction.allCases) { action in
+                            Text(action.rawValue).tag(action)
+                        }
+                    }
+                    .onChange(of: postAction) { _, newValue in
+                        PowerManager.shared.postDownloadAction = newValue
+                    }
                 }
             }
 

@@ -33,4 +33,28 @@ public struct DownloadSegment: Identifiable, Codable, Sendable, Equatable {
         self.isCompleted = isCompleted
         self.tempFileName = tempFileName
     }
+
+    /// Divides a byte range into `count` non-overlapping segments covering 0..<totalBytes.
+    public static func calculateSegments(totalBytes: Int64, segmentCount: Int, filename: String) -> [DownloadSegment] {
+        guard totalBytes > 0, segmentCount > 0 else { return [] }
+        let count = min(segmentCount, Int(totalBytes))
+        let chunkSize = totalBytes / Int64(count)
+        var segments: [DownloadSegment] = []
+
+        for i in 0..<count {
+            let start = Int64(i) * chunkSize
+            let end = (i == count - 1) ? (totalBytes - 1) : ((Int64(i + 1) * chunkSize) - 1)
+            let seg = DownloadSegment(
+                id: i,
+                startByte: start,
+                endByte: end,
+                downloadedBytes: 0,
+                isCompleted: false,
+                tempFileName: "\(filename).part.seg\(i)"
+            )
+            segments.append(seg)
+        }
+        return segments
+    }
 }
+

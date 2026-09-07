@@ -4,6 +4,7 @@ import MacDownloaderCore
 
 public struct MainView: View {
     @StateObject private var viewModel = AppViewModel()
+    @State private var isDropTargeted: Bool = false
 
     public init() {}
 
@@ -69,21 +70,43 @@ public struct MainView: View {
 
                 Divider()
 
-                // Download Queue List
-                if viewModel.filteredItems.isEmpty {
-                    emptyQueueView
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 10) {
-                            ForEach(viewModel.filteredItems) { item in
-                                DownloadRowView(item: item, viewModel: viewModel)
+                // Download Queue List with Drag-and-Drop
+                ZStack {
+                    if viewModel.filteredItems.isEmpty {
+                        emptyQueueView
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 10) {
+                                ForEach(viewModel.filteredItems) { item in
+                                    DownloadRowView(item: item, viewModel: viewModel)
+                                }
                             }
+                            .padding(16)
                         }
-                        .padding(16)
+                        .background(Color(NSColor.windowBackgroundColor).opacity(0.01).onTapGesture {
+                            viewModel.deselectAll()
+                        })
                     }
-                    .background(Color(NSColor.windowBackgroundColor).opacity(0.01).onTapGesture {
-                        viewModel.deselectAll()
-                    })
+
+                    if isDropTargeted {
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.accentColor, lineWidth: 3)
+                            .background(Color.accentColor.opacity(0.08))
+                            .padding(8)
+                            .overlay(
+                                VStack(spacing: 8) {
+                                    Image(systemName: "arrow.down.doc.fill")
+                                        .font(.system(size: 44))
+                                        .foregroundColor(.accentColor)
+                                    Text("Drop URLs or Links to Download")
+                                        .font(.headline)
+                                        .foregroundColor(.accentColor)
+                                }
+                            )
+                    }
+                }
+                .onDrop(of: [.url, .plainText], isTargeted: $isDropTargeted) { providers in
+                    handleDrop(providers: providers)
                 }
 
                 Divider()
@@ -179,20 +202,42 @@ public struct MainView: View {
                     .help("Clear queue options")
                 }
 
+                Button(action: { viewModel.isShowingSchedulerSheet = true }) {
+                    Label("Scheduler", systemImage: "calendar.badge.clock")
+                }
+                .help("Automated Queue Scheduler")
+
+                Button(action: { FloatingDropTargetManager.shared.toggle() }) {
+                    Label("Drop Target", systemImage: "arrow.down.circle")
+                }
+                .help("Toggle Floating Drop Basket")
+
                 Button(action: { viewModel.isShowingSettingsSheet = true }) {
                     Label("Preferences", systemImage: "gearshape")
                 }
                 .help("Open Preferences")
             }
         }
+        .onAppear {
+            MenuBarManager.shared.setup(with: viewModel)
+            FloatingDropTargetManager.shared.configure(with: viewModel)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openAddSheetNotification)) { _ in
             viewModel.isShowingAddSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .incomingDownloadURLNotification)) { notification in
+            if let targetURL = notification.object as? URL {
+                viewModel.scheduler.add(urls: [targetURL])
+            }
         }
         .sheet(isPresented: $viewModel.isShowingAddSheet) {
             BatchAddSheet(viewModel: viewModel, initialText: viewModel.initialAddInput)
         }
         .sheet(isPresented: $viewModel.isShowingSettingsSheet) {
             SettingsView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.isShowingSchedulerSheet) {
+            SchedulerSheet(timeScheduler: viewModel.timeScheduler)
         }
         .alert(
             "Download Link Detected",
@@ -215,6 +260,32 @@ public struct MainView: View {
                 Text("Found link in clipboard: \(first.lastPathComponent)\nWould you like to start downloading?")
             }
         }
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url = url {
+                    DispatchQueue.main.async {
+                        viewModel.initialAddInput = url.absoluteString
+                        viewModel.isShowingAddSheet = true
+                    }
+                }
+            }
+
+            _ = provider.loadObject(ofClass: String.self) { text, _ in
+                if let text = text {
+                    let parsed = URLParser.parse(text: text)
+                    if !parsed.isEmpty {
+                        DispatchQueue.main.async {
+                            viewModel.initialAddInput = parsed.map { $0.absoluteString }.joined(separator: "\n")
+                            viewModel.isShowingAddSheet = true
+                        }
+                    }
+                }
+            }
+        }
+        return true
     }
 
     // MARK: - Subviews

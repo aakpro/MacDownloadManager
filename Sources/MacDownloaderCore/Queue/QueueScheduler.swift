@@ -195,9 +195,15 @@ public final class QueueScheduler: ObservableObject {
             if deleteFiles {
                 Self.safeDeleteFile(at: item.destinationFileURL)
                 Self.safeDeleteFile(at: item.partFileURL)
+                for seg in item.segments {
+                    Self.safeDeleteFile(at: item.segmentFileURL(for: seg))
+                }
             } else {
                 if item.status != .completed {
                     Self.safeDeleteFile(at: item.partFileURL)
+                    for seg in item.segments {
+                        Self.safeDeleteFile(at: item.segmentFileURL(for: seg))
+                    }
                 }
             }
         }
