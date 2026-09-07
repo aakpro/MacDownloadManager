@@ -9,6 +9,7 @@ public enum StatusFilter: String, CaseIterable, Identifiable {
     case downloading = "Downloading"
     case paused = "Paused"
     case completed = "Completed"
+    case failed = "Failed"
 
     public var id: String { rawValue }
 }
@@ -23,6 +24,9 @@ public final class AppViewModel: ObservableObject {
     @Published public var selectedCategory: DownloadCategory? = nil
     @Published public var selectedStatus: StatusFilter = .all
     @Published public var searchQuery: String = ""
+
+    // Multi-Selection State
+    @Published public var selectedItemIDs: Set<UUID> = []
 
     // Sheet Presentations
     @Published public var isShowingAddSheet: Bool = false
@@ -88,6 +92,8 @@ public final class AppViewModel: ObservableObject {
             list = list.filter { $0.status == .paused }
         case .completed:
             list = list.filter { $0.status == .completed }
+        case .failed:
+            list = list.filter { $0.status == .failed || $0.status == .cancelled }
         }
 
         // Search query
@@ -107,6 +113,68 @@ public final class AppViewModel: ObservableObject {
             return scheduler.items.filter { $0.category == cat }.count
         }
         return scheduler.items.count
+    }
+
+    // MARK: - Selection Management
+
+    public func toggleSelection(for itemID: UUID) {
+        if selectedItemIDs.contains(itemID) {
+            selectedItemIDs.remove(itemID)
+        } else {
+            selectedItemIDs.insert(itemID)
+        }
+    }
+
+    public func selectOnly(_ itemID: UUID) {
+        selectedItemIDs = [itemID]
+    }
+
+    public func selectAll() {
+        selectedItemIDs = Set(filteredItems.map { $0.id })
+    }
+
+    public func deselectAll() {
+        selectedItemIDs.removeAll()
+    }
+
+    public func isSelected(_ itemID: UUID) -> Bool {
+        selectedItemIDs.contains(itemID)
+    }
+
+    // MARK: - Batch & Individual Actions
+
+    public func deleteSelected(deleteFiles: Bool = false) {
+        guard !selectedItemIDs.isEmpty else { return }
+        scheduler.remove(ids: selectedItemIDs, deleteFiles: deleteFiles)
+        selectedItemIDs.removeAll()
+    }
+
+    public func pauseSelected() {
+        scheduler.pause(ids: selectedItemIDs)
+    }
+
+    public func resumeSelected() {
+        scheduler.resume(ids: selectedItemIDs)
+    }
+
+    public func remove(item: DownloadItem, deleteFiles: Bool = false) {
+        selectedItemIDs.remove(item.id)
+        scheduler.remove(id: item.id, deleteFiles: deleteFiles)
+    }
+
+    public func clearCompleted(deleteFiles: Bool = false) {
+        selectedItemIDs.subtract(scheduler.items.filter { $0.status == .completed }.map { $0.id })
+        scheduler.clearCompleted(deleteFiles: deleteFiles)
+    }
+
+    public func clearFailed(deleteFiles: Bool = false) {
+        selectedItemIDs.subtract(scheduler.items.filter { $0.status == .failed || $0.status == .cancelled }.map { $0.id })
+        scheduler.clearFailed(deleteFiles: deleteFiles)
+    }
+
+    public func clearAll(deleteFiles: Bool = false) {
+        selectedItemIDs.removeAll()
+        scheduler.clearAll(deleteFiles: deleteFiles)
     }
 
     // MARK: - Actions

@@ -20,11 +20,13 @@ public struct CategoryManager: Sendable {
 
     /// Resolves the destination directory for a specific category.
     public func destinationFolder(for category: DownloadCategory, customBase: URL? = nil) -> URL {
-        let base = customBase ?? defaultBaseFolder
-        guard isAutoCategorizationEnabled else {
-            return base
+        if let custom = customBase {
+            return custom
         }
-        return base.appendingPathComponent(category.subfolderName)
+        guard isAutoCategorizationEnabled else {
+            return defaultBaseFolder
+        }
+        return defaultBaseFolder.appendingPathComponent(category.subfolderName)
     }
 
     /// Resolves a non-colliding unique filename in the target directory (e.g. `file (1).zip`).

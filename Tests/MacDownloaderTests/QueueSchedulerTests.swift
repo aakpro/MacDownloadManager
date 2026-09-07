@@ -106,4 +106,95 @@ final class QueueSchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.items[1].filename, "video (1).mp4")
         XCTAssertEqual(scheduler.items[2].filename, "video (2).mp4")
     }
+
+    func testBatchDeletionAndDiskFileCleanup() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("del_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let persistence = PersistenceManager(customStorageDirectory: tempDir)
+        let scheduler = QueueScheduler(persistenceManager: persistence)
+        scheduler.isAutoProcessingEnabled = false
+
+        let urls = [
+            URL(string: "https://example.com/file1.zip")!,
+            URL(string: "https://example.com/file2.zip")!,
+            URL(string: "https://example.com/file3.zip")!
+        ]
+
+        scheduler.add(urls: urls, destinationFolder: tempDir, startImmediately: false)
+        XCTAssertEqual(scheduler.items.count, 3)
+
+        // Create dummy destination and part files on disk
+        let item1 = scheduler.items[0]
+        let item2 = scheduler.items[1]
+        let dummyData = "dummy content".data(using: .utf8)!
+        try dummyData.write(to: item1.destinationFileURL)
+        try dummyData.write(to: item1.partFileURL)
+        try dummyData.write(to: item2.partFileURL)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: item1.destinationFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: item1.partFileURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: item2.partFileURL.path))
+
+        // Batch remove item1 and item2 with deleteFiles: true
+        let idsToDelete: Set<UUID> = [item1.id, item2.id]
+        scheduler.remove(ids: idsToDelete, deleteFiles: true)
+
+        XCTAssertEqual(scheduler.items.count, 1)
+        XCTAssertEqual(scheduler.items[0].filename, "file3.zip")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item1.destinationFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item1.partFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: item2.partFileURL.path))
+    }
+
+    func testClearFailedAndClearAll() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("clear_all_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let persistence = PersistenceManager(customStorageDirectory: tempDir)
+        let scheduler = QueueScheduler(persistenceManager: persistence)
+        scheduler.isAutoProcessingEnabled = false
+
+        let urls = [
+            URL(string: "https://example.com/itemA.zip")!,
+            URL(string: "https://example.com/itemB.zip")!,
+            URL(string: "https://example.com/itemC.zip")!
+        ]
+
+        scheduler.add(urls: urls, destinationFolder: tempDir, startImmediately: false)
+        XCTAssertEqual(scheduler.items.count, 3)
+
+        // Mark itemA as failed, itemB as cancelled, itemC as completed
+        scheduler.updateItemStatus(id: scheduler.items[0].id, status: .failed)
+        scheduler.updateItemStatus(id: scheduler.items[1].id, status: .cancelled)
+        scheduler.updateItemStatus(id: scheduler.items[2].id, status: .completed)
+
+        // Clear failed removes failed & cancelled
+        scheduler.clearFailed()
+        XCTAssertEqual(scheduler.items.count, 1)
+        XCTAssertEqual(scheduler.items[0].status, .completed)
+
+        // Clear all removes everything
+        scheduler.clearAll()
+        XCTAssertTrue(scheduler.items.isEmpty)
+    }
+
+    func testCustomBaseFolderRouting() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("custom_base_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let persistence = PersistenceManager(customStorageDirectory: tempDir)
+        let scheduler = QueueScheduler(persistenceManager: persistence)
+        scheduler.isAutoProcessingEnabled = false
+
+        let url = URL(string: "https://git.ir/api/download?filename=video.mp4")!
+        scheduler.add(urls: [url], destinationFolder: tempDir, startImmediately: false)
+
+        XCTAssertEqual(scheduler.items.count, 1)
+        // With custom destinationFolder specified, destinationFolder should be tempDir directly, not nested
+        XCTAssertEqual(scheduler.items[0].destinationFolder.path, tempDir.path)
+    }
 }

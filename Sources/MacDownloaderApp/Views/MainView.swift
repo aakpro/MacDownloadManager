@@ -81,6 +81,9 @@ public struct MainView: View {
                         }
                         .padding(16)
                     }
+                    .background(Color(NSColor.windowBackgroundColor).opacity(0.01).onTapGesture {
+                        viewModel.deselectAll()
+                    })
                 }
 
                 Divider()
@@ -88,34 +91,102 @@ public struct MainView: View {
                 // Bottom Status Bar
                 statusBarView
             }
+            .background(
+                // Invisible buttons to capture keyboard shortcuts
+                Group {
+                    Button("") {
+                        viewModel.deleteSelected(deleteFiles: false)
+                    }
+                    .keyboardShortcut(.delete, modifiers: [])
+
+                    Button("") {
+                        viewModel.deleteSelected(deleteFiles: true)
+                    }
+                    .keyboardShortcut(.delete, modifiers: .command)
+
+                    Button("") {
+                        viewModel.selectAll()
+                    }
+                    .keyboardShortcut("a", modifiers: .command)
+
+                    Button("") {
+                        viewModel.deselectAll()
+                    }
+                    .keyboardShortcut(.cancelAction)
+                }
+                .frame(width: 0, height: 0)
+                .opacity(0)
+            )
         }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button(action: { viewModel.isShowingAddSheet = true }) {
                     Label("Add Downloads", systemImage: "plus")
                 }
-                .help("Add download link(s)")
+                .help("Add download link(s) (⌘N)")
 
-                Button(action: { viewModel.scheduler.resumeAll() }) {
-                    Label("Start All", systemImage: "play.fill")
-                }
-                .help("Resume all downloads")
+                if !viewModel.selectedItemIDs.isEmpty {
+                    // Selected Items Actions
+                    Button(action: { viewModel.resumeSelected() }) {
+                        Label("Resume", systemImage: "play.fill")
+                    }
+                    .help("Resume selected downloads")
 
-                Button(action: { viewModel.scheduler.pauseAll() }) {
-                    Label("Pause All", systemImage: "pause.fill")
-                }
-                .help("Pause all downloads")
+                    Button(action: { viewModel.pauseSelected() }) {
+                        Label("Pause", systemImage: "pause.fill")
+                    }
+                    .help("Pause selected downloads")
 
-                Button(action: { viewModel.scheduler.clearCompleted() }) {
-                    Label("Clear Completed", systemImage: "trash")
+                    Menu {
+                        Button("Remove from List (\(viewModel.selectedItemIDs.count))") {
+                            viewModel.deleteSelected(deleteFiles: false)
+                        }
+                        Button("Delete Files to Trash (\(viewModel.selectedItemIDs.count))", role: .destructive) {
+                            viewModel.deleteSelected(deleteFiles: true)
+                        }
+                    } label: {
+                        Label("Delete (\(viewModel.selectedItemIDs.count))", systemImage: "trash")
+                    }
+                    .help("Delete selected downloads (⌫)")
+                } else {
+                    Button(action: { viewModel.scheduler.resumeAll() }) {
+                        Label("Start All", systemImage: "play.fill")
+                    }
+                    .help("Resume all downloads")
+
+                    Button(action: { viewModel.scheduler.pauseAll() }) {
+                        Label("Pause All", systemImage: "pause.fill")
+                    }
+                    .help("Pause all downloads")
+
+                    Menu {
+                        Button("Clear Completed") {
+                            viewModel.clearCompleted()
+                        }
+                        Button("Clear Failed / Cancelled") {
+                            viewModel.clearFailed()
+                        }
+                        Divider()
+                        Button("Clear All Downloads", role: .destructive) {
+                            viewModel.clearAll(deleteFiles: false)
+                        }
+                        Button("Delete All Files to Trash", role: .destructive) {
+                            viewModel.clearAll(deleteFiles: true)
+                        }
+                    } label: {
+                        Label("Clear", systemImage: "trash")
+                    }
+                    .help("Clear queue options")
                 }
-                .help("Clear completed downloads from list")
 
                 Button(action: { viewModel.isShowingSettingsSheet = true }) {
                     Label("Preferences", systemImage: "gearshape")
                 }
                 .help("Open Preferences")
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .openAddSheetNotification)) { _ in
+            viewModel.isShowingAddSheet = true
         }
         .sheet(isPresented: $viewModel.isShowingAddSheet) {
             BatchAddSheet(viewModel: viewModel, initialText: viewModel.initialAddInput)
@@ -200,9 +271,22 @@ public struct MainView: View {
 
             Spacer()
 
-            Text("\(viewModel.filteredItems.count) item\(viewModel.filteredItems.count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            if !viewModel.selectedItemIDs.isEmpty {
+                HStack(spacing: 8) {
+                    Text("\(viewModel.selectedItemIDs.count) of \(viewModel.filteredItems.count) selected")
+                        .font(.caption)
+                        .foregroundColor(.accentColor)
+                    Button("Deselect") {
+                        viewModel.deselectAll()
+                    }
+                    .font(.caption)
+                    .buttonStyle(BorderlessButtonStyle())
+                }
+            } else {
+                Text("\(viewModel.filteredItems.count) item\(viewModel.filteredItems.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
