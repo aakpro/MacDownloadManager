@@ -12,7 +12,12 @@ RESOURCES_DIR = $(APP_BUNDLE)/Contents/Resources
 
 SWIFT_FLAGS = --disable-sandbox
 
-.PHONY: all build test run app clean release help lint
+export TMPDIR = $(CURDIR)/.tmp
+export CLANG_MODULE_CACHE_PATH = $(CURDIR)/.cache/clang
+export SWIFTPM_MODULECACHE_OVERRIDE = $(CURDIR)/.cache/swiftpm
+
+.PHONY: all build test run app clean release help
+
 
 all: build
 
@@ -51,37 +56,7 @@ app: build
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES_DIR)"
 	@cp -f ".build/release/$(APP_NAME)" "$(MACOS_DIR)/$(APP_NAME)"
 	@chmod +x "$(MACOS_DIR)/$(APP_NAME)"
-	@echo "==> Generating Info.plist..."
-	@cat << 'EOF' > "$(APP_BUNDLE)/Contents/Info.plist"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>en</string>
-	<key>CFBundleExecutable</key>
-	<string>MacDownloader</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.macdownloader.app</string>
-	<key>CFBundleInfoDictionaryVersion</key>
-	<string>6.0</string>
-	<key>CFBundleName</key>
-	<string>MacDownloader</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
-	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 MacDownloader. All rights reserved.</string>
-</dict>
-</plist>
-EOF
+	@cp -f Resources/Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
 	@echo "==> Application bundle successfully created at $(APP_BUNDLE)"
 
 ## clean: Remove all build outputs
