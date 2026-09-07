@@ -12,27 +12,47 @@ public struct URLParser: Sendable {
     public static func parse(text: String, filterExtension: String? = nil) -> [URL] {
         var rawTokens: [String] = []
 
-        // 1. Split by lines, commas, semicolons, and tabs while preserving spaces within query parameters
+        // 1. Extract tokens line-by-line while handling multiple URLs per line safely
         let lines = text.components(separatedBy: CharacterSet.newlines)
         for line in lines {
             let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedLine.isEmpty else { continue }
 
-            let subDelimiters = CharacterSet(charactersIn: ",;\t")
-            let parts = trimmedLine.components(separatedBy: subDelimiters)
-            for part in parts {
-                let trimmed = cleanToken(part)
-                guard !trimmed.isEmpty else { continue }
-
-                // Check if multiple URLs exist on the same line separated by whitespace
-                if trimmed.components(separatedBy: "http").count > 2 {
-                    let spaceSeparated = trimmed.components(separatedBy: .whitespaces)
-                    for s in spaceSeparated {
-                        let cl = cleanToken(s)
+            // If the line contains multiple URLs, extract them with regex or delimiter
+            if trimmedLine.lowercased().components(separatedBy: "http").count > 2 {
+                var tokensOnLine: [String] = []
+                let regexPattern = "https?://[^\\s\"'<>\\]\\)]+"
+                if let regex = try? NSRegularExpression(pattern: regexPattern, options: [.caseInsensitive]) {
+                    let nsString = trimmedLine as NSString
+                    let matches = regex.matches(in: trimmedLine, options: [], range: NSRange(location: 0, length: nsString.length))
+                    for match in matches {
+                        let matchedStr = nsString.substring(with: match.range)
+                        tokensOnLine.append(matchedStr)
+                    }
+                }
+                if tokensOnLine.isEmpty {
+                    let parts = trimmedLine.components(separatedBy: CharacterSet(charactersIn: " \t,;"))
+                    for part in parts {
+                        let cl = cleanToken(part)
                         if !cl.isEmpty { rawTokens.append(cl) }
                     }
                 } else {
-                    rawTokens.append(trimmed)
+                    for t in tokensOnLine {
+                        let cl = cleanToken(t)
+                        if !cl.isEmpty { rawTokens.append(cl) }
+                    }
+                }
+            } else {
+                // Check if multiple comma-separated URLs exist without query params
+                if trimmedLine.contains(",") && !trimmedLine.contains("?") && !trimmedLine.contains("=") {
+                    let parts = trimmedLine.components(separatedBy: ",")
+                    for part in parts {
+                        let cl = cleanToken(part)
+                        if !cl.isEmpty { rawTokens.append(cl) }
+                    }
+                } else {
+                    let cl = cleanToken(trimmedLine)
+                    if !cl.isEmpty { rawTokens.append(cl) }
                 }
             }
         }

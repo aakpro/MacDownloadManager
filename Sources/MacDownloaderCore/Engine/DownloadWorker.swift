@@ -108,6 +108,18 @@ public actor DownloadWorker {
         var request = URLRequest(url: item.url)
         request.timeoutInterval = 45
 
+        // Standard browser headers
+        let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        request.setValue("keep-alive", forHTTPHeaderField: "Connection")
+
+        // Crucial for sites like git.ir that reject requests without Referer
+        if let scheme = item.url.scheme, let host = item.url.host {
+            request.setValue("\(scheme)://\(host)/", forHTTPHeaderField: "Referer")
+        }
+
         if existingBytes > 0 {
             request.setValue("bytes=\(existingBytes)-", forHTTPHeaderField: "Range")
         }
@@ -115,7 +127,19 @@ public actor DownloadWorker {
         let streamer = WorkerStreamSession()
         self.activeStreamSession = streamer
 
-        let (httpResponse, stream) = try await streamer.start(request: request)
+        var (httpResponse, stream) = try await streamer.start(request: request)
+
+        // Handle 416 Range Not Satisfiable: partial file offset invalid, retry fresh from 0
+        if httpResponse.statusCode == 416 && existingBytes > 0 {
+            try? fileManager.removeItem(at: currentPartURL)
+            existingBytes = 0
+            request.setValue(nil, forHTTPHeaderField: "Range")
+            let retryStreamer = WorkerStreamSession()
+            self.activeStreamSession = retryStreamer
+            let retried = try await retryStreamer.start(request: request)
+            httpResponse = retried.0
+            stream = retried.1
+        }
 
         // Determine resume capability & Content-Length
         let isPartial = httpResponse.statusCode == 206
@@ -134,27 +158,28 @@ public actor DownloadWorker {
             }
         }
 
-        if let newName = refinedName, !newName.isEmpty {
-            let currentHasExt = (item.filename as NSString).pathExtension.count > 0
-            let newHasExt = (newName as NSString).pathExtension.count > 0
+        if let newName = refinedName, !newName.isEmpty && newName != item.filename {
+            let uniqueNewName = CategoryManager.resolveUniqueFilename(in: item.destinationFolder, originalFilename: newName)
+            let oldPartURL = currentPartURL
+            item.filename = uniqueNewName
+            item.category = DownloadCategory.detect(from: uniqueNewName)
+            currentPartURL = item.partFileURL
 
-            // Upgrade if current filename lacks an extension or new filename has valid extension
-            if !currentHasExt && newHasExt {
-                let uniqueNewName = CategoryManager.resolveUniqueFilename(in: item.destinationFolder, originalFilename: newName)
-                let oldPartURL = currentPartURL
-                item.filename = uniqueNewName
-                item.category = DownloadCategory.detect(from: uniqueNewName)
-                currentPartURL = item.partFileURL
-
-                if fileManager.fileExists(atPath: oldPartURL.path) && oldPartURL != currentPartURL {
-                    try? fileManager.moveItem(at: oldPartURL, to: currentPartURL)
-                }
+            if fileManager.fileExists(atPath: oldPartURL.path) && oldPartURL != currentPartURL {
+                try? fileManager.moveItem(at: oldPartURL, to: currentPartURL)
             }
         }
 
-        let responseLength = httpResponse.expectedContentLength
-        if responseLength > 0 {
-            item.totalBytes = isPartial ? (existingBytes + responseLength) : responseLength
+        // Determine total content length
+        if let contentRange = httpResponse.value(forHTTPHeaderField: "Content-Range"),
+           let totalStr = contentRange.components(separatedBy: "/").last?.trimmingCharacters(in: .whitespaces),
+           let total = Int64(totalStr), total > 0 {
+            item.totalBytes = total
+        } else {
+            let responseLength = httpResponse.expectedContentLength
+            if responseLength > 0 {
+                item.totalBytes = isPartial ? (existingBytes + responseLength) : responseLength
+            }
         }
 
         // Initialize file handle
@@ -198,6 +223,14 @@ public actor DownloadWorker {
         } catch {
             try? fileHandle.close()
             throw error
+        }
+
+        // Verify task was not cancelled while stream was wrapping up
+        try Task.checkCancellation()
+
+        // Verify download wasn't truncated prematurely
+        if item.totalBytes > 0 && item.downloadedBytes < item.totalBytes {
+            throw URLError(.networkConnectionLost)
         }
 
         self.activeStreamSession = nil
@@ -284,7 +317,7 @@ private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unch
         config.timeoutIntervalForRequest = 45
         config.timeoutIntervalForResource = 86400
         config.httpAdditionalHeaders = [
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "Accept": "*/*"
         ]
 
@@ -304,8 +337,28 @@ private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unch
 
     func cancel() {
         dataTask?.cancel()
-        streamContinuation?.finish()
+        streamContinuation?.finish(throwing: CancellationError())
         session?.invalidateAndCancel()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        var redirected = newRequest
+        // Preserve User-Agent and Referer headers on redirection
+        if redirected.value(forHTTPHeaderField: "User-Agent") == nil,
+           let originalUA = task.originalRequest?.value(forHTTPHeaderField: "User-Agent") {
+            redirected.setValue(originalUA, forHTTPHeaderField: "User-Agent")
+        }
+        if redirected.value(forHTTPHeaderField: "Referer") == nil,
+           let originalReferer = task.originalRequest?.value(forHTTPHeaderField: "Referer") {
+            redirected.setValue(originalReferer, forHTTPHeaderField: "Referer")
+        }
+        completionHandler(redirected)
     }
 
     func urlSession(
@@ -321,21 +374,22 @@ private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unch
             return
         }
 
-        guard (200...299).contains(http.statusCode) else {
-            let error = NSError(
-                domain: "MacDownloaderHTTPError",
-                code: http.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "HTTP Server returned status code \(http.statusCode)"]
-            )
-            responseContinuation?.resume(throwing: error)
+        // 200...299 is success. Allow 416 through so caller can handle Range retries.
+        if (200...299).contains(http.statusCode) || http.statusCode == 416 {
+            responseContinuation?.resume(returning: http)
             responseContinuation = nil
-            completionHandler(.cancel)
+            completionHandler(http.statusCode == 416 ? .cancel : .allow)
             return
         }
 
-        responseContinuation?.resume(returning: http)
+        let error = NSError(
+            domain: "MacDownloaderHTTPError",
+            code: http.statusCode,
+            userInfo: [NSLocalizedDescriptionKey: "HTTP Server returned status code \(http.statusCode)"]
+        )
+        responseContinuation?.resume(throwing: error)
         responseContinuation = nil
-        completionHandler(.allow)
+        completionHandler(.cancel)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
@@ -345,7 +399,7 @@ private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unch
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
             if (error as? URLError)?.code == .cancelled {
-                streamContinuation?.finish()
+                streamContinuation?.finish(throwing: CancellationError())
             } else {
                 if let cont = responseContinuation {
                     responseContinuation = nil
@@ -354,6 +408,10 @@ private final class WorkerStreamSession: NSObject, URLSessionDataDelegate, @unch
                 streamContinuation?.finish(throwing: error)
             }
         } else {
+            if let cont = responseContinuation {
+                responseContinuation = nil
+                cont.resume(throwing: URLError(.cannotParseResponse))
+            }
             streamContinuation?.finish()
         }
         session.finishTasksAndInvalidate()

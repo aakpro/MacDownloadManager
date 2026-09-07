@@ -174,17 +174,48 @@ public final class QueueScheduler: ObservableObject {
 
     /// Removes an item from the queue list and optionally deletes downloaded/partial files.
     public func remove(id: UUID, deleteFiles: Bool = false) {
-        if let index = items.firstIndex(where: { $0.id == id }) {
-            let item = items[index]
-            cancel(id: id)
-            items.remove(at: index)
+        remove(ids: [id], deleteFiles: deleteFiles)
+    }
 
-            if deleteFiles {
-                try? FileManager.default.removeItem(at: item.destinationFileURL)
-                try? FileManager.default.removeItem(at: item.partFileURL)
+    /// Removes multiple items from the queue in batch and optionally deletes downloaded/partial files.
+    public func remove(ids: Set<UUID>, deleteFiles: Bool = false) {
+        guard !ids.isEmpty else { return }
+
+        let toRemove = items.filter { ids.contains($0.id) }
+        guard !toRemove.isEmpty else { return }
+
+        for item in toRemove {
+            if let worker = workers[item.id] {
+                Task {
+                    await worker.cancel()
+                }
+                workers.removeValue(forKey: item.id)
             }
 
-            persistQueue()
+            if deleteFiles {
+                Self.safeDeleteFile(at: item.destinationFileURL)
+                Self.safeDeleteFile(at: item.partFileURL)
+            } else {
+                if item.status != .completed {
+                    Self.safeDeleteFile(at: item.partFileURL)
+                }
+            }
+        }
+
+        items.removeAll(where: { ids.contains($0.id) })
+
+        updateAggregateMetrics()
+        persistQueue()
+        processQueue()
+    }
+
+    /// Safely deletes or moves a file to macOS Trash.
+    public static func safeDeleteFile(at url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
@@ -209,6 +240,20 @@ public final class QueueScheduler: ObservableObject {
         persistQueue()
     }
 
+    /// Pauses a batch of items.
+    public func pause(ids: Set<UUID>) {
+        for id in ids {
+            pause(id: id)
+        }
+    }
+
+    /// Resumes a batch of items.
+    public func resume(ids: Set<UUID>) {
+        for id in ids {
+            resume(id: id)
+        }
+    }
+
     /// Resumes all paused, failed, or cancelled downloads.
     public func resumeAll() {
         for index in items.indices {
@@ -223,15 +268,21 @@ public final class QueueScheduler: ObservableObject {
     }
 
     /// Clears completed downloads from the queue list.
-    public func clearCompleted() {
-        items.removeAll(where: { $0.status == .completed })
-        persistQueue()
+    public func clearCompleted(deleteFiles: Bool = false) {
+        let completedIDs = Set(items.filter { $0.status == .completed }.map { $0.id })
+        remove(ids: completedIDs, deleteFiles: deleteFiles)
     }
 
-    /// Clears failed downloads from the queue.
-    public func clearFailed() {
-        items.removeAll(where: { $0.status == .failed })
-        persistQueue()
+    /// Clears failed and cancelled downloads from the queue.
+    public func clearFailed(deleteFiles: Bool = false) {
+        let failedIDs = Set(items.filter { $0.status == .failed || $0.status == .cancelled }.map { $0.id })
+        remove(ids: failedIDs, deleteFiles: deleteFiles)
+    }
+
+    /// Clears all downloads from the queue.
+    public func clearAll(deleteFiles: Bool = false) {
+        let allIDs = Set(items.map { $0.id })
+        remove(ids: allIDs, deleteFiles: deleteFiles)
     }
 
     /// Dynamically adjusts global speed limit.
@@ -269,7 +320,6 @@ public final class QueueScheduler: ObservableObject {
 
     private func startWorker(for item: DownloadItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
-        items[index].status = .connecting
         items[index].errorMessage = nil
 
         let worker = DownloadWorker(

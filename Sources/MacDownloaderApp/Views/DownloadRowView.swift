@@ -79,7 +79,7 @@ public struct DownloadRowView: View {
                 Spacer()
 
                 // Action buttons
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     if item.status == .downloading || item.status == .connecting {
                         Button(action: { viewModel.scheduler.pause(id: item.id) }) {
                             Image(systemName: "pause.fill")
@@ -104,6 +104,21 @@ public struct DownloadRowView: View {
                         .help("Reveal in Finder")
                     }
 
+                    // Direct Delete / Trash Button
+                    Menu {
+                        Button("Remove from Queue") {
+                            viewModel.remove(item: item, deleteFiles: false)
+                        }
+                        Button("Delete File to Trash", role: .destructive) {
+                            viewModel.remove(item: item, deleteFiles: true)
+                        }
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundColor(.secondary)
+                    }
+                    .menuStyle(BorderlessButtonMenuStyle())
+                    .help("Delete / Remove Download")
+
                     Menu {
                         Button("Reveal in Finder") {
                             viewModel.revealInFinder(for: item)
@@ -123,10 +138,10 @@ public struct DownloadRowView: View {
                         }
                         Divider()
                         Button("Remove from List", role: .destructive) {
-                            viewModel.scheduler.remove(id: item.id, deleteFiles: false)
+                            viewModel.remove(item: item, deleteFiles: false)
                         }
                         Button("Delete File", role: .destructive) {
-                            viewModel.scheduler.remove(id: item.id, deleteFiles: true)
+                            viewModel.remove(item: item, deleteFiles: true)
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -137,13 +152,37 @@ public struct DownloadRowView: View {
             }
         }
         .padding(10)
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
+        .background(
+            viewModel.isSelected(item.id)
+                ? Color.accentColor.opacity(0.16)
+                : Color(NSColor.controlBackgroundColor).opacity(0.6)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor).opacity(0.3), lineWidth: 1)
+                .stroke(
+                    viewModel.isSelected(item.id)
+                        ? Color.accentColor.opacity(0.8)
+                        : Color(NSColor.separatorColor).opacity(0.3),
+                    lineWidth: viewModel.isSelected(item.id) ? 1.5 : 1
+                )
         )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if NSEvent.modifierFlags.contains(.command) {
+                viewModel.toggleSelection(for: item.id)
+            } else {
+                viewModel.selectOnly(item.id)
+            }
+        }
         .contextMenu {
+            Button("Select") {
+                viewModel.selectOnly(item.id)
+            }
+            Button("Select All") {
+                viewModel.selectAll()
+            }
+            Divider()
             Button("Reveal in Finder") {
                 viewModel.revealInFinder(for: item)
             }
@@ -157,12 +196,15 @@ public struct DownloadRowView: View {
             if item.status.canResume {
                 Button("Resume") { viewModel.scheduler.resume(id: item.id) }
             }
+            if item.status == .failed || item.status == .cancelled {
+                Button("Retry") { viewModel.scheduler.retry(id: item.id) }
+            }
             Divider()
             Button("Remove from List") {
-                viewModel.scheduler.remove(id: item.id, deleteFiles: false)
+                viewModel.remove(item: item, deleteFiles: false)
             }
-            Button("Delete File", role: .destructive) {
-                viewModel.scheduler.remove(id: item.id, deleteFiles: true)
+            Button("Delete File to Trash", role: .destructive) {
+                viewModel.remove(item: item, deleteFiles: true)
             }
         }
     }
