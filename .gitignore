@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Xcode & SwiftPM
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# In-flight partial downloads
+*.part
+*.download
+*.tmp
+
+# Local cache & logs
+.cache/
+build/
+*.log
