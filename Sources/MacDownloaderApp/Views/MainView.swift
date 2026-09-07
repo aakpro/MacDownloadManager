@@ -1,0 +1,211 @@
+import SwiftUI
+import AppKit
+import MacDownloaderCore
+
+public struct MainView: View {
+    @StateObject private var viewModel = AppViewModel()
+
+    public init() {}
+
+    public var body: some View {
+        NavigationSplitView {
+            // Sidebar
+            List(selection: $viewModel.selectedCategory) {
+                Section("All Downloads") {
+                    HStack {
+                        Label("All Downloads", systemImage: "tray.full")
+                        Spacer()
+                        Text("\(viewModel.count(for: nil))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .tag(nil as DownloadCategory?)
+                }
+
+                Section("Categories") {
+                    ForEach(DownloadCategory.allCases, id: \.self) { cat in
+                        HStack {
+                            Label(cat.rawValue, systemImage: cat.iconName)
+                            Spacer()
+                            Text("\(viewModel.count(for: cat))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .tag(cat as DownloadCategory?)
+                    }
+                }
+            }
+            .listStyle(SidebarListStyle())
+            .frame(minWidth: 200, idealWidth: 220)
+        } detail: {
+            VStack(spacing: 0) {
+                // Header / Filter Bar
+                HStack(spacing: 12) {
+                    Picker("", selection: $viewModel.selectedStatus) {
+                        ForEach(StatusFilter.allCases) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .frame(maxWidth: 320)
+
+                    Spacer()
+
+                    // Search field
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        TextField("Search downloads...", text: $viewModel.searchQuery)
+                            .textFieldStyle(PlainTextFieldStyle())
+                    }
+                    .padding(6)
+                    .background(Color(NSColor.controlBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .frame(maxWidth: 240)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color(NSColor.windowBackgroundColor))
+
+                Divider()
+
+                // Download Queue List
+                if viewModel.filteredItems.isEmpty {
+                    emptyQueueView
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(viewModel.filteredItems) { item in
+                                DownloadRowView(item: item, viewModel: viewModel)
+                            }
+                        }
+                        .padding(16)
+                    }
+                }
+
+                Divider()
+
+                // Bottom Status Bar
+                statusBarView
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button(action: { viewModel.isShowingAddSheet = true }) {
+                    Label("Add Downloads", systemImage: "plus")
+                }
+                .help("Add download link(s)")
+
+                Button(action: { viewModel.scheduler.resumeAll() }) {
+                    Label("Start All", systemImage: "play.fill")
+                }
+                .help("Resume all downloads")
+
+                Button(action: { viewModel.scheduler.pauseAll() }) {
+                    Label("Pause All", systemImage: "pause.fill")
+                }
+                .help("Pause all downloads")
+
+                Button(action: { viewModel.scheduler.clearCompleted() }) {
+                    Label("Clear Completed", systemImage: "trash")
+                }
+                .help("Clear completed downloads from list")
+
+                Button(action: { viewModel.isShowingSettingsSheet = true }) {
+                    Label("Preferences", systemImage: "gearshape")
+                }
+                .help("Open Preferences")
+            }
+        }
+        .sheet(isPresented: $viewModel.isShowingAddSheet) {
+            BatchAddSheet(viewModel: viewModel, initialText: viewModel.initialAddInput)
+        }
+        .sheet(isPresented: $viewModel.isShowingSettingsSheet) {
+            SettingsView(viewModel: viewModel)
+        }
+        .alert(
+            "Download Link Detected",
+            isPresented: Binding<Bool>(
+                get: { viewModel.detectedClipboardURLs != nil },
+                set: { if !$0 { viewModel.detectedClipboardURLs = nil } }
+            )
+        ) {
+            Button("Add to Queue") {
+                if let urls = viewModel.detectedClipboardURLs {
+                    viewModel.scheduler.add(urls: urls)
+                }
+                viewModel.detectedClipboardURLs = nil
+            }
+            Button("Ignore", role: .cancel) {
+                viewModel.detectedClipboardURLs = nil
+            }
+        } message: {
+            if let urls = viewModel.detectedClipboardURLs, let first = urls.first {
+                Text("Found link in clipboard: \(first.lastPathComponent)\nWould you like to start downloading?")
+            }
+        }
+    }
+
+    // MARK: - Subviews
+
+    private var emptyQueueView: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.6))
+
+            Text("No Downloads in Queue")
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundColor(.secondary)
+
+            Text("Paste one or more download links (separated by commas or lines)")
+                .font(.subheadline)
+                .foregroundColor(.secondary.opacity(0.8))
+
+            Button(action: { viewModel.isShowingAddSheet = true }) {
+                Label("Add Download(s)", systemImage: "plus")
+                    .padding(.horizontal, 8)
+            }
+            .buttonStyle(BorderedProminentButtonStyle())
+            .padding(.top, 4)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var statusBarView: some View {
+        HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(viewModel.scheduler.activeCount > 0 ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+                Text("\(viewModel.scheduler.activeCount) active of \(viewModel.scheduler.maxConcurrentDownloads) max")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if viewModel.scheduler.totalSpeed > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "speedometer")
+                        .font(.caption)
+                    Text("Total: \(DownloadItem.formatByteCount(Int64(viewModel.scheduler.totalSpeed)))/s")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                .foregroundColor(.blue)
+            }
+
+            Spacer()
+
+            Text("\(viewModel.filteredItems.count) item\(viewModel.filteredItems.count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+}

@@ -10,8 +10,8 @@ This document tracks the incremental delivery of MacDownloader across isolated G
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | `feat/phase-1-core-engine` | **Completed** | Models, URLParser (comma/newline/patterns), SpeedLimiter, DownloadWorker, 17 Unit Tests |
 | **Phase 2** | `feat/phase-2-queue-persistence` | **Completed** | QueueScheduler, CategoryManager, ChecksumVerifier, PersistenceManager, 24 Tests |
-| **Phase 3** | `feat/phase-3-macos-ui` | **In Progress** | SwiftUI UI (MainView, BatchAddSheet, Settings), ClipboardMonitor, Notifications |
-| **Phase 4** | `feat/phase-4-release-packaging` | Planned | Makefile packaging (`make app`), Full Tests, Docs Finalization, Merge & Tag `v1.0.0` |
+| **Phase 3** | `feat/phase-3-macos-ui` | **Completed** | SwiftUI UI (MainView, BatchAddSheet, Settings, Row), ClipboardMonitor, Notifications |
+| **Phase 4** | `feat/phase-4-release-packaging` | **In Progress** | Makefile packaging (`make app`), Full Tests, Docs Finalization, Merge & Tag `v1.0.0` |
 
 ---
 
