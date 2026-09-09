@@ -37,9 +37,8 @@ private final class DockProgressView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         // Draw standard app icon
-        if let icon = NSApp.applicationIconImage {
-            icon.draw(in: bounds)
-        }
+        let icon = NSApp.applicationIconImage ?? (Bundle.main.url(forResource: "AppIcon", withExtension: "icns").flatMap { NSImage(contentsOf: $0) })
+        icon?.draw(in: bounds)
 
         guard isActive else { return }
 
