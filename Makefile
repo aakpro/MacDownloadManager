@@ -4,7 +4,7 @@
 
 APP_NAME = MacDownloader
 BUNDLE_ID = com.macdownloader.app
-VERSION = 1.0.0
+VERSION = 1.2.0
 BUILD_DIR = build
 APP_BUNDLE = $(BUILD_DIR)/$(APP_NAME).app
 MACOS_DIR = $(APP_BUNDLE)/Contents/MacOS
@@ -18,7 +18,6 @@ export SWIFTPM_MODULECACHE_OVERRIDE = $(CURDIR)/.cache/swiftpm
 
 .PHONY: all build test run app clean release help
 
-
 all: build
 
 ## help: Print available targets
@@ -30,8 +29,9 @@ help:
 	@echo "  make test       - Run all unit and integration tests"
 	@echo "  make run        - Build and run the macOS SwiftUI application"
 	@echo "  make app        - Package release binary into MacDownloader.app bundle"
+	@echo "  make zip        - Create distributable zip archive of the app"
 	@echo "  make clean      - Remove build artifacts and caches"
-	@echo "  make release    - Run test suite and assemble release .app bundle"
+	@echo "  make release    - Run test suite and assemble release .app bundle & zip"
 	@echo "  make help       - Display this help message"
 	@echo "========================================================================"
 
@@ -57,16 +57,25 @@ app: build
 	@cp -f ".build/release/$(APP_NAME)" "$(MACOS_DIR)/$(APP_NAME)"
 	@chmod +x "$(MACOS_DIR)/$(APP_NAME)"
 	@cp -f Resources/Info.plist "$(APP_BUNDLE)/Contents/Info.plist"
+	@if [ -f Resources/AppIcon.icns ]; then cp -f Resources/AppIcon.icns "$(RESOURCES_DIR)/AppIcon.icns"; fi
 	@echo "==> Application bundle successfully created at $(APP_BUNDLE)"
+
+## zip: Package the .app into a zip file for distribution
+zip: app
+	@echo "==> Creating zip archive for release..."
+	@ditto -c -k --sequesterRsrc --keepParent "$(APP_BUNDLE)" "$(BUILD_DIR)/$(APP_NAME)-v$(VERSION)-macOS.zip"
+	@echo "==> Zip archive created at $(BUILD_DIR)/$(APP_NAME)-v$(VERSION)-macOS.zip"
 
 ## clean: Remove all build outputs
 clean:
 	@echo "==> Cleaning build artifacts..."
-	@rm -rf .build "$(BUILD_DIR)" .cache
+	@rm -rf .build "$(BUILD_DIR)" .cache .tmp
 	@echo "==> Clean complete."
 
-## release: Test and build .app bundle
-release: test app
+## release: Test and build .app bundle + zip
+release: test zip
 	@echo "========================================================================"
 	@echo "==> Release build ready: $(APP_BUNDLE)"
+	@echo "==> Release archive ready: $(BUILD_DIR)/$(APP_NAME)-v$(VERSION)-macOS.zip"
 	@echo "========================================================================"
+
