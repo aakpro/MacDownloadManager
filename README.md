@@ -64,11 +64,29 @@ make test
 make run
 ```
 
-### Package into Standalone `.app` Bundle
+### Package into Standalone `.app`, `.dmg`, and `.zip`
 ```bash
+make release
+# Or individually:
 make app
-open build/MacDownloader.app
+make dmg
+make zip
 ```
+
+### ⚠️ Note for macOS Users (Gatekeeper / "App is damaged" message)
+Since MacDownloader is open-source and ad-hoc code-signed without an Apple Developer ID certificate ($99/year), macOS Gatekeeper may flag downloaded binaries with:  
+> *"MacDownloader is damaged and can't be opened. You should move it to the Trash."* or *"Apple cannot verify the developer."*
+
+To open the app, simply remove the quarantine attribute via Terminal:
+```bash
+xattr -cr /Applications/MacDownloader.app
+```
+*(Or on the unzipped `.app` before moving it: `xattr -cr MacDownloader.app`)*
+
+Alternatively:
+1. Open **System Settings** -> **Privacy & Security**.
+2. Scroll down to the **Security** section where MacDownloader is listed.
+3. Click **Open Anyway**.
 
 ### Install Browser Native Messaging Host
 ```bash
